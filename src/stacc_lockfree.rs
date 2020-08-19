@@ -136,6 +136,19 @@ impl<T> Stacc<T> {
             }
         }
 
+        let mut global_garbage = self.inner.global_garbage.lock().unwrap();
+        std::mem::swap(&mut *global_garbage, &mut self.local_garbage);
+        drop(global_garbage);
+
+        if let Some(nonnull) = self.local_garbage.pop() {
+            /* SAFETY: local_garbage should have only pointers that come from Box::into_raw */
+            unsafe {
+                let mut boxed = Box::from_raw(nonnull.as_ptr());
+                boxed.item = MaybeUninit::new(x);
+                return boxed;
+            }
+        }
+
         return Box::new(StaccNode::new(x));
     }
     pub fn pop(&mut self) -> Option<T> {
@@ -172,20 +185,8 @@ impl<T> Clone for Stacc<T> {
 
 impl<T> Drop for Stacc<T> {
     fn drop(&mut self) {
-        let mut lock = self.inner.global_garbage.lock().unwrap();
-        for ptr in self.local_garbage.iter().copied() {
-            /* SAFETY: the pointers from local_garbage should be valid */
-            let counter = unsafe { ptr.as_ref().counter.load(Ordering::Acquire) };
-
-            if counter == 0 {
-                /* SAFETY: the pointers from local_garbage should come from Box::into_raw */
-                let boxed = unsafe { Box::from_raw(ptr.as_ptr()) };
-                drop(boxed);
-                continue;
-            }
-
-            lock.push(ptr);
-        }
+        let mut global_garbage = self.inner.global_garbage.lock().unwrap();
+        global_garbage.append(&mut self.local_garbage);
     }
 }
 
