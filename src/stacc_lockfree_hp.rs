@@ -1,3 +1,7 @@
+/* The code tries to be 1:1 copy of LIFO stack from 
+ * https://cs.nyu.edu/courses/fall16/CSCI-GA.3033-017/readings/hazard_pointers.pdf
+ */
+
 use std::sync::{
     atomic::*,
     Arc,
@@ -94,10 +98,7 @@ impl<T> Private<T> {
                 continue;
             }
 
-            /* SAFETY: ??? 
-             * The code tries to be 1:1 copy of LIFO stack from 
-             * https://cs.nyu.edu/courses/fall16/CSCI-GA.3033-017/readings/hazard_pointers.pdf
-             */
+            /* SAFETY: We marked the pointer as hazard, so nobody should even try to dealloc it */ 
             let next = unsafe { (*top).next };
             let cas = self.shared.top.compare_exchange(
                 top,
@@ -107,7 +108,8 @@ impl<T> Private<T> {
             );
 
             if cas.is_ok() {
-                /* SAFETY: ??? + see safety above */
+                /* SAFETY: only one thread can succeed at CAS, so we are the only
+                 * ones reading top.data */
                 let data = unsafe {
                     ptr::read((*top).data.as_ptr())
                 };
