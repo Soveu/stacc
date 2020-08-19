@@ -8,13 +8,11 @@ use std::sync::{
 
 /* NonNull must come from Box::into_raw */
 unsafe fn nonnull_to_box<T>(ptr: NonNull<StaccNode<T>>) -> Box<StaccNode<T>> {
-    assert_eq!(ptr.as_ref().counter.load(Ordering::Acquire), 0);
     return Box::from_raw(ptr.as_ptr());
 }
 
 struct StaccNode<T> {
     next: Option<NonNull<StaccNode<T>>>,
-    counter: AtomicUsize,
     item: MaybeUninit<T>,
 }
 
@@ -22,7 +20,6 @@ impl<T> StaccNode<T> {
     fn new(item: T) -> Self {
         Self {
             next: None,
-            counter: AtomicUsize::new(0),
             item: MaybeUninit::new(item),
         }
     }
@@ -72,7 +69,6 @@ impl<T> StaccInner<T> {
             /* SAFETY: head is non-null, so it should be pointing to right element */
             let headref = unsafe { head.as_ref() };
 
-            headref.counter.fetch_add(1, Ordering::Relaxed);
             let newhead = match headref.next {
                 None => 0 as *mut _,
                 Some(p) => p.as_ptr(),
@@ -89,8 +85,6 @@ impl<T> StaccInner<T> {
                 self.len.fetch_sub(1, Ordering::Relaxed);
                 return Some(head);
             }
-
-            headref.counter.fetch_sub(1, Ordering::Relaxed);
         };
     }
 
@@ -156,7 +150,6 @@ impl<T> Stacc<T> {
 
         /* SAFETY: `pop()?` should give us only valid pointers */
         let item = unsafe {
-            nonnull.as_ref().counter.fetch_sub(1, Ordering::Relaxed);
             ptr::read(&nonnull.as_ref().item).assume_init()
         };
 
