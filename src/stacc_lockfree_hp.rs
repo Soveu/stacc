@@ -35,7 +35,7 @@ impl<T> Private<T> {
             .shared
             .hazard_pointers
             .iter()
-            .map(|x| x.load(Ordering::Relaxed) as *const Node<T>)
+            .map(|x| x.load(Ordering::Acquire) as *const Node<T>)
             .filter(|p| !p.is_null())
             .collect();
 
