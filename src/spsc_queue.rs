@@ -1,8 +1,8 @@
-use std::sync::atomic::{Ordering, AtomicUsize};
-use std::sync::Arc;
-use std::mem::MaybeUninit;
 use std::cell::UnsafeCell;
+use std::mem::MaybeUninit;
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 struct QueueInner<T> {
     head: AtomicUsize,
@@ -64,9 +64,7 @@ impl<T> QueueConsumer<T> {
         let mask = cap - 1;
 
         let head = head.wrapping_add(1) & mask;
-        let item = unsafe {
-            ptr::read(self.inner.data[head].get()).assume_init()
-        };
+        let item = unsafe { ptr::read(self.inner.data[head].get()).assume_init() };
 
         self.inner.head.store(head, Ordering::Relaxed);
         return Some(item);
@@ -106,4 +104,3 @@ impl<T> QueueProducer<T> {
         return None;
     }
 }
-

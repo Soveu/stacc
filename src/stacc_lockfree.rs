@@ -1,10 +1,6 @@
-use std::ptr::{self, NonNull};
 use std::mem::MaybeUninit;
-use std::sync::{
-    Arc,
-    Mutex,
-    atomic::*,
-};
+use std::ptr::{self, NonNull};
+use std::sync::{atomic::*, Arc, Mutex};
 
 /* NonNull must come from Box::into_raw */
 unsafe fn nonnull_to_box<T>(ptr: NonNull<StaccNode<T>>) -> Box<StaccNode<T>> {
@@ -46,7 +42,8 @@ impl<T> Drop for StaccInner<T> {
         let garbage = self.global_garbage.get_mut().unwrap();
 
         /* SAFETY: We should be the only one having access to allocated memory */
-        garbage.iter()
+        garbage
+            .iter()
             .copied()
             .map(|p| unsafe { nonnull_to_box(p) })
             .for_each(drop);
@@ -81,11 +78,11 @@ impl<T> StaccInner<T> {
                 Ordering::Relaxed,
             );
 
-            if x.is_ok() { 
+            if x.is_ok() {
                 self.len.fetch_sub(1, Ordering::Relaxed);
                 return Some(head);
             }
-        };
+        }
     }
 
     fn push(&self, mut node: Box<StaccNode<T>>) {
@@ -93,11 +90,9 @@ impl<T> StaccInner<T> {
         node.next = NonNull::new(head);
         let node = Box::into_raw(node);
 
-        while let Err(newhead) = self.head.compare_exchange(
-            head,
-            node,
-            Ordering::Acquire,
-            Ordering::Relaxed)
+        while let Err(newhead) =
+            self.head
+                .compare_exchange(head, node, Ordering::Acquire, Ordering::Relaxed)
         {
             /* SAFETY: we own the allocated object, so it must still exist */
             unsafe { (*node).next = NonNull::new(newhead) };
@@ -149,9 +144,7 @@ impl<T> Stacc<T> {
         let nonnull = self.inner.pop()?;
 
         /* SAFETY: `pop()?` should give us only valid pointers */
-        let item = unsafe {
-            ptr::read(&nonnull.as_ref().item).assume_init()
-        };
+        let item = unsafe { ptr::read(&nonnull.as_ref().item).assume_init() };
 
         self.local_garbage.push(nonnull);
         return Some(item);
@@ -182,4 +175,3 @@ impl<T> Drop for Stacc<T> {
         global_garbage.append(&mut self.local_garbage);
     }
 }
-

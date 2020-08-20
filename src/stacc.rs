@@ -1,10 +1,10 @@
-use std::sync::{
-    atomic::{Ordering, AtomicIsize},
-    Arc,
-};
-use std::ptr;
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
+use std::ptr;
+use std::sync::{
+    atomic::{AtomicIsize, Ordering},
+    Arc,
+};
 
 /* We need parking_lot's implementation of RwLock, because it guarantees some fairness */
 use parking_lot::{Mutex, RwLock};
@@ -78,7 +78,7 @@ impl<T> AtomicPush<T> {
 
         let n = oldlen as usize;
         /* Now we are the only one having access to self.slice[n] */
-        unsafe { 
+        unsafe {
             let cellref = &*self.slice[n].as_ptr();
             ptr::write(cellref.get(), x);
         }
@@ -127,7 +127,11 @@ impl<T> StaccInner<T> {
 
         let poppers = self.poppers.read();
         let poppers_len = poppers.len.load(Ordering::Relaxed);
-        let poppers_len = if poppers_len < 0 { 0usize } else { poppers_len as usize };
+        let poppers_len = if poppers_len < 0 {
+            0usize
+        } else {
+            poppers_len as usize
+        };
         let poppers_maxlen = poppers.slice.len();
         drop(poppers);
 
@@ -148,7 +152,11 @@ impl<T> StaccInner<T> {
 
         let pushers = self.pushers.read();
         let pushers_len = pushers.len.load(Ordering::Relaxed);
-        let pushers_len = if pushers_len < 0 { 0usize } else { pushers_len as usize };
+        let pushers_len = if pushers_len < 0 {
+            0usize
+        } else {
+            pushers_len as usize
+        };
         drop(pushers);
 
         if pushers_len != 0 {
@@ -197,4 +205,3 @@ impl<T> Clone for Stacc<T> {
         }
     }
 }
-
