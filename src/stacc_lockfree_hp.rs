@@ -35,7 +35,7 @@ impl<T> Private<T> {
             .shared
             .hazard_pointers
             .iter()
-            .map(|x| x.load(Ordering::Acquire) as *const Node<T>)
+            .map(|x| x.load(Ordering::Relaxed) as *const Node<T>)
             .filter(|p| !p.is_null())
             .collect();
 
@@ -90,16 +90,23 @@ impl<T> Private<T> {
                 return None;
             }
 
+            compiler_fence(Ordering::SeqCst);
+
             let newertop = self.shared.top.load(Ordering::Acquire);
             if newertop != top {
                 top = newertop;
                 continue;
             }
 
-            fence(Ordering::Acquire);
-            /* SAFETY: We marked the pointer as hazard, so nobody should even try to dealloc it */
-            /* UNSAFETY?: could this line be executed before marking it as hazard?
-             * Theoretically we have right before a fence, but is it sufficient? */
+            compiler_fence(Ordering::SeqCst);
+
+            /* SAFETY: We marked the pointer as hazard, so nobody should even try to dealloc it.
+             * Compiler is forced to put this after fences.
+             * Hardware can pre-fetch the result (because of speculative execution), but it
+             * shouldn't change correctness of this code, because top.next is a constant.
+             * Also, it shouldn't cause segfault, unlike software instruction reordering.
+             * If it was writing to the structure, a fence or atomic operations with
+             * SeqCst would be needed */
             let next = unsafe { (*top).next };
 
             /* Note: maybe change it to compare_exchange_weak? */
