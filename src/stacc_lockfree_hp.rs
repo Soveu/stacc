@@ -5,9 +5,11 @@
 use std::mem::MaybeUninit;
 use std::ptr;
 use std::sync::{atomic::*, Arc};
+use std::sync::Mutex;
 
-const MAX_THREADS: usize = 64;
-const R: usize = 8; // chosen by dice roll
+/* 32, because arrays implement Default only up to 32 elements :( */
+const MAX_THREADS: usize = 32;
+const R: usize = 42;
 
 struct Node<T> {
     data: MaybeUninit<T>,
@@ -17,6 +19,40 @@ struct Node<T> {
 struct Shared<T> {
     top: AtomicPtr<Node<T>>,
     hazard_pointers: [AtomicPtr<Node<T>>; MAX_THREADS],
+    boxes_that_are_still_hazard: Mutex<Vec<*const Node<T>>>,
+    counter: AtomicUsize,
+}
+
+impl<T> Shared<T> {
+    fn new() -> Self {
+        Self {
+            top: AtomicPtr::new(ptr::null_mut()),
+            hazard_pointers: Default::default(),
+            boxes_that_are_still_hazard: Mutex::new(Vec::new()),
+            counter: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl<T> Drop for Shared<T> {
+    fn drop(&mut self) {
+        let v: &mut Vec<_> = self.boxes_that_are_still_hazard.get_mut().unwrap();
+
+        for ptr in v.iter().copied() {
+            /* SAFETY: pointer is from Box::into_raw and we are the only ones having it */
+            debug_assert!(!ptr.is_null());
+            let boxed = unsafe { Box::from_raw(ptr as *mut Node<T>) };
+            drop(boxed);
+        }
+
+        let mut top = *self.top.get_mut();
+        while !top.is_null() {
+            let next = unsafe { (*top).next };
+            let boxed = unsafe { Box::from_raw(top) };
+            drop(boxed);
+            top = next as *mut _;
+        }
+    }
 }
 
 pub struct Private<T> {
@@ -26,11 +62,26 @@ pub struct Private<T> {
 }
 
 impl<T> Private<T> {
-    fn prepare_for_reuse(&mut self, _boxed: Box<Node<T>>) {
-        /* currently, just drop */
+    pub fn new() -> Self {
+        let shared = Shared::new();
+        Self {
+            thread_number: shared.counter.fetch_add(1, Ordering::Relaxed),
+            shared: Arc::new(shared),
+            retired_pointers: Vec::new(),
+        }
+    }
+
+    fn get_node(&mut self, node: Node<T>) -> Box<Node<T>> {
+        Box::new(node)
+    }
+    fn prepare_for_reuse(&mut self, boxed: Box<Node<T>>) {
+        drop(boxed);
     }
 
     fn scan(&mut self) {
+        /* It shouldn't be needed, but its just nice to have fresher data */
+        fence(Ordering::Acquire);
+
         let mut v: Vec<*const Node<T>> = self
             .shared
             .hazard_pointers
@@ -43,7 +94,7 @@ impl<T> Private<T> {
         let mut rlist = std::mem::replace(&mut self.retired_pointers, Vec::new());
 
         for ptr in rlist.drain_filter(|x| v.binary_search(x).is_err()) {
-            /* SAFETY: pointers from Box::into_raw */
+            /* SAFETY: pointer is from Box::into_raw and we are the only ones having it */
             debug_assert!(!ptr.is_null());
             let boxed = unsafe { Box::from_raw(ptr as *mut Node<T>) };
             self.prepare_for_reuse(boxed);
@@ -61,11 +112,11 @@ impl<T> Private<T> {
 
     pub fn push(&mut self, data: T) {
         let mut top = self.shared.top.load(Ordering::Acquire);
-        let node = Box::new(Node {
+        let node = Node {
             next: top as *const _,
             data: MaybeUninit::new(data),
-        });
-
+        };
+        let node = self.get_node(node);
         let node = Box::into_raw(node);
 
         while let Err(newtop) =
@@ -85,35 +136,29 @@ impl<T> Private<T> {
         let mut top = self.shared.top.load(Ordering::Acquire);
 
         let oldtop = loop {
-            self.shared.hazard_pointers[self.thread_number].store(top, Ordering::Release);
+            /* SeqCst is _very_ important here, thanks Acrimon for pointing it out */
+            self.shared.hazard_pointers[self.thread_number].store(top, Ordering::SeqCst);
             if top.is_null() {
                 return None;
             }
 
-            compiler_fence(Ordering::SeqCst);
-
-            let newertop = self.shared.top.load(Ordering::Acquire);
+            let newertop = self.shared.top.load(Ordering::SeqCst);
             if newertop != top {
                 top = newertop;
                 continue;
             }
 
-            compiler_fence(Ordering::SeqCst);
-
             /* SAFETY: We marked the pointer as hazard, so nobody should even try to dealloc it.
              * Compiler is forced to put this after fences.
              * Hardware can pre-fetch the result (because of speculative execution), but it
              * shouldn't change correctness of this code, because top.next is a constant.
-             * Also, it shouldn't cause segfault, unlike software instruction reordering.
-             * If it was writing to the structure, a fence or atomic operations with
-             * SeqCst would be needed */
+             * Also, it shouldn't cause segfault, unlike software instruction reordering. */
             let next = unsafe { (*top).next };
 
-            /* Note: maybe change it to compare_exchange_weak? */
-            let cas = self.shared.top.compare_exchange(
+            let cas = self.shared.top.compare_exchange_weak(
                 top,
                 next as *mut _,
-                Ordering::AcqRel,
+                Ordering::SeqCst,
                 Ordering::Acquire,
             );
 
@@ -134,3 +179,36 @@ impl<T> Private<T> {
         return Some(data);
     }
 }
+
+impl<T> Drop for Private<T> {
+    fn drop(&mut self) {
+        self.shared.hazard_pointers[self.thread_number].store(ptr::null_mut(), Ordering::Release);
+
+        let mut v: Vec<*const Node<T>> = self
+            .shared
+            .hazard_pointers
+            .iter()
+            .map(|x| x.load(Ordering::Acquire) as *const Node<T>)
+            .filter(|p| !p.is_null())
+            .collect();
+
+        v.sort_unstable();
+        let mut lock = self.shared.boxes_that_are_still_hazard.lock().unwrap();
+
+        let iter = self.retired_pointers.drain_filter(|x| v.binary_search(x).is_err());
+        lock.extend(iter);
+    }
+}
+
+impl<T> Clone for Private<T> {
+    fn clone(&self) -> Self {
+        let shared = Arc::clone(&self.shared);
+        let thread_number = shared.counter.fetch_add(1, Ordering::AcqRel);
+        Self {
+            shared,
+            thread_number,
+            retired_pointers: Vec::new(),
+        }
+    }
+}
+
