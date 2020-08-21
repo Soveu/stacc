@@ -4,8 +4,8 @@
 
 use std::mem::MaybeUninit;
 use std::ptr;
-use std::sync::{atomic::*, Arc};
 use std::sync::Mutex;
+use std::sync::{atomic::*, Arc};
 
 /* 32, because arrays implement Default only up to 32 elements :( */
 const MAX_THREADS: usize = 32;
@@ -195,7 +195,9 @@ impl<T> Drop for Private<T> {
         v.sort_unstable();
         let mut lock = self.shared.boxes_that_are_still_hazard.lock().unwrap();
 
-        let iter = self.retired_pointers.drain_filter(|x| v.binary_search(x).is_err());
+        let iter = self
+            .retired_pointers
+            .drain_filter(|x| v.binary_search(x).is_err());
         lock.extend(iter);
     }
 }
@@ -211,4 +213,3 @@ impl<T> Clone for Private<T> {
         }
     }
 }
-
