@@ -16,6 +16,8 @@ pub struct Node<T> {
     next: *const Node<T>,
 }
 
+unsafe impl<T> Send for Node<T> {}
+
 impl<T> Node<T> {
     pub fn uninit() -> Self {
         Self {
@@ -81,7 +83,7 @@ pub struct LockFreeStacc<T> {
     pub cached_allocations: Vec<Box<Node<T>>>,
 }
 
-unsafe impl<T> Send for LockFreeStacc<T> {}
+unsafe impl<T: Send> Send for LockFreeStacc<T> {}
 
 impl<T> LockFreeStacc<T> {
     pub fn new() -> Self {
