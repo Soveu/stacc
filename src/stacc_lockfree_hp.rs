@@ -183,22 +183,9 @@ impl<T> Private<T> {
 impl<T> Drop for Private<T> {
     fn drop(&mut self) {
         self.shared.hazard_pointers[self.thread_number].store(ptr::null_mut(), Ordering::Release);
-
-        let mut v: Vec<*const Node<T>> = self
-            .shared
-            .hazard_pointers
-            .iter()
-            .map(|x| x.load(Ordering::Acquire) as *const Node<T>)
-            .filter(|p| !p.is_null())
-            .collect();
-
-        v.sort_unstable();
+        self.scan();
         let mut lock = self.shared.boxes_that_are_still_hazard.lock().unwrap();
-
-        let iter = self
-            .retired_pointers
-            .drain_filter(|x| v.binary_search(x).is_err());
-        lock.extend(iter);
+        lock.append(&mut self.retired_pointers);
     }
 }
 
