@@ -53,7 +53,7 @@ impl<T> QueueConsumer<T> {
     }
 
     pub fn pop(&mut self) -> Option<T> {
-        let head = self.inner.head.load(Ordering::Relaxed);
+        let head = self.inner.head.load(Ordering::Acquire);
         let tail = self.inner.tail.load(Ordering::Acquire);
 
         if head == tail {
@@ -66,7 +66,7 @@ impl<T> QueueConsumer<T> {
         let head = head.wrapping_add(1) & mask;
         let item = unsafe { ptr::read(self.inner.data[head].get()).assume_init() };
 
-        self.inner.head.store(head, Ordering::Relaxed);
+        self.inner.head.store(head, Ordering::Release);
         return Some(item);
     }
 }
@@ -86,7 +86,7 @@ impl<T> QueueProducer<T> {
 
     pub fn push(&mut self, x: T) -> Option<T> {
         let head = self.inner.head.load(Ordering::Acquire);
-        let tail = self.inner.tail.load(Ordering::Relaxed);
+        let tail = self.inner.tail.load(Ordering::Acquire);
 
         let cap = self.inner.data.len();
         let mask = cap - 1;
@@ -99,7 +99,7 @@ impl<T> QueueProducer<T> {
         unsafe {
             ptr::write(self.inner.data[newtail].get(), MaybeUninit::new(x));
         }
-        self.inner.tail.store(newtail, Ordering::Relaxed);
+        self.inner.tail.store(newtail, Ordering::Release);
 
         return None;
     }

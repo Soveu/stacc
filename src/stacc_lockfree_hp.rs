@@ -61,6 +61,8 @@ pub struct Private<T> {
     thread_number: usize,
 }
 
+unsafe impl<T> Send for Private<T> {}
+
 impl<T> Private<T> {
     pub fn new() -> Self {
         let shared = Shared::new();

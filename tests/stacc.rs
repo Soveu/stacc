@@ -1,5 +1,5 @@
 use std::thread;
-use stacc::*;
+use stacc::stacc::*;
 
 #[test]
 fn single() {
