@@ -29,18 +29,40 @@ fn consumer_producer() {
 
     let mut vc = v.clone();
     let reciever = thread::spawn(move || {
-        for _ in 0..10_000_000 {
+        let mut misses = 0;
+        for _ in 0..5_000_000 {
             let x = loop {
                 match vc.pop() {
-                    None => continue,
+                    None => misses += 1,
                     Some(x) => break x,
                 }
             };
 
             assert_eq!(1, x);
         }
+
+        eprintln!("Misses: {}", misses);
+    });
+
+
+    let mut vc = v.clone();
+    let reciever2 = thread::spawn(move || {
+        let mut misses = 0;
+        for _ in 0..5_000_000 {
+            let x = loop {
+                match vc.pop() {
+                    None => misses += 1,
+                    Some(x) => break x,
+                }
+            };
+
+            assert_eq!(1, x);
+        }
+
+        eprintln!("Misses: {}", misses);
     });
 
     sender.join().unwrap();
     reciever.join().unwrap();
+    reciever2.join().unwrap();
 }

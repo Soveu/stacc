@@ -19,8 +19,15 @@ struct Node<T> {
 struct Shared<T> {
     top: AtomicPtr<Node<T>>,
     hazard_pointers: [AtomicPtr<Node<T>>; MAX_THREADS],
+
+    /* If a Private is being dropped, but some pointers are still marked as
+     * hazard, they end up here */
     boxes_that_are_still_hazard: Mutex<Vec<*const Node<T>>>,
+    /* Used to give unique ID for each thread */
     counter: AtomicUsize,
+
+    /* (Optional) Purely for statistics, is updated using relaxed ordering */
+    len: AtomicUsize,
 }
 
 impl<T> Shared<T> {
@@ -30,6 +37,7 @@ impl<T> Shared<T> {
             hazard_pointers: Default::default(),
             boxes_that_are_still_hazard: Mutex::new(Vec::new()),
             counter: AtomicUsize::new(0),
+            len: AtomicUsize::new(0),
         }
     }
 }
@@ -59,6 +67,9 @@ pub struct Private<T> {
     shared: Arc<Shared<T>>,
     retired_pointers: Vec<*const Node<T>>,
     thread_number: usize,
+
+    /* (Optional) reduces calls to alloc() and dealloc() */
+    cached_allocations: Vec<Box<Node<T>>>,
 }
 
 unsafe impl<T> Send for Private<T> {}
@@ -70,14 +81,21 @@ impl<T> Private<T> {
             thread_number: shared.counter.fetch_add(1, Ordering::Relaxed),
             shared: Arc::new(shared),
             retired_pointers: Vec::new(),
+            cached_allocations: Vec::new(),
         }
+    }
+    pub fn drop_cached_allocations(&mut self) {
+        self.cached_allocations.clear()
     }
 
     fn get_node(&mut self, node: Node<T>) -> Box<Node<T>> {
-        Box::new(node)
+        match self.cached_allocations.pop() {
+            None => Box::new(node),
+            Some(b) => b,
+        }
     }
     fn prepare_for_reuse(&mut self, boxed: Box<Node<T>>) {
-        drop(boxed);
+        self.cached_allocations.push(boxed);
     }
 
     fn scan(&mut self) {
@@ -132,6 +150,8 @@ impl<T> Private<T> {
             }
             top = newtop;
         }
+
+        self.shared.len.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn pop(&mut self) -> Option<T> {
@@ -172,6 +192,7 @@ impl<T> Private<T> {
 
         /* Ordering is relaxed, because this thread now is responsible for the allocated memory */
         self.shared.hazard_pointers[self.thread_number].store(ptr::null_mut(), Ordering::Relaxed);
+        self.shared.len.fetch_sub(1, Ordering::Relaxed);
 
         /* SAFETY: only one thread can succeed at CAS, so we are the only
          * ones reading oldtop.data */
@@ -179,6 +200,10 @@ impl<T> Private<T> {
 
         self.retire_node(oldtop);
         return Some(data);
+    }
+
+    pub fn len(&self) -> usize {
+        self.shared.len.load(Ordering::Relaxed)
     }
 }
 
@@ -199,6 +224,7 @@ impl<T> Clone for Private<T> {
             shared,
             thread_number,
             retired_pointers: Vec::new(),
+            cached_allocations: Vec::new(),
         }
     }
 }
