@@ -10,17 +10,27 @@ use std::sync::{atomic::*, Arc};
 /* 32, because arrays implement Default only up to 32 elements :( */
 const MAX_THREADS: usize = 32;
 const R: usize = 42;
+const MAX_CACHED_ALLOCS: usize = 65536;
 
 struct Node<T> {
     data: MaybeUninit<T>,
     next: *const Node<T>,
 }
 
+impl<T> Node<T> {
+    fn uninit() -> Self {
+        Self {
+            data: MaybeUninit::uninit(),
+            next: 0 as *const Self,
+        }
+    }
+}
+
 struct Shared<T> {
     top: AtomicPtr<Node<T>>,
     hazard_pointers: [AtomicPtr<Node<T>>; MAX_THREADS],
 
-    /* If a Private is being dropped, but some pointers are still marked as
+    /* If a LockFreeStacc is being dropped, but some pointers are still marked as
      * hazard, they end up here */
     boxes_that_are_still_hazard: Mutex<Vec<*const Node<T>>>,
     /* Used to give unique ID for each thread */
@@ -63,29 +73,66 @@ impl<T> Drop for Shared<T> {
     }
 }
 
-pub struct Private<T> {
+pub struct CachedAllocations<T>(Vec<Box<Node<T>>>);
+
+impl<T> CachedAllocations<T> {
+    pub const fn new() -> Self {
+        Self(Vec::new())
+    }
+    pub fn truncate(&mut self, n: usize) {
+        self.0.truncate(n)
+    }
+    pub fn reserve(&mut self, n: usize) {
+        self.0.reserve(n)
+    }
+    pub fn clear(&mut self) {
+        self.0.clear()
+    }
+    pub fn append(&mut self, other: &mut Self) {
+        self.0.append(&mut other.0)
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn pop(&mut self) -> Option<Box<Node<T>>> {
+        self.0.pop()
+    }
+    fn push(&mut self, boxed: Box<Node<T>>) {
+        if self.0.len() > MAX_CACHED_ALLOCS {
+            drop(boxed);
+            return;
+        }
+
+        self.0.push(boxed)
+    }
+
+    pub fn reserve_allocs(&mut self, n: usize) {
+        let iter = (0..n).map(|_| Box::new(Node::uninit()));
+        self.0.extend(iter);
+    }
+}
+
+pub struct LockFreeStacc<T> {
     shared: Arc<Shared<T>>,
     retired_pointers: Vec<*const Node<T>>,
     thread_number: usize,
 
     /* (Optional) reduces calls to alloc() and dealloc() */
-    cached_allocations: Vec<Box<Node<T>>>,
+    pub cached_allocations: CachedAllocations<T>,
 }
 
-unsafe impl<T> Send for Private<T> {}
+unsafe impl<T> Send for LockFreeStacc<T> {}
 
-impl<T> Private<T> {
+impl<T> LockFreeStacc<T> {
     pub fn new() -> Self {
         let shared = Shared::new();
         Self {
             thread_number: shared.counter.fetch_add(1, Ordering::Relaxed),
             shared: Arc::new(shared),
             retired_pointers: Vec::new(),
-            cached_allocations: Vec::new(),
+            cached_allocations: CachedAllocations::new(),
         }
-    }
-    pub fn drop_cached_allocations(&mut self) {
-        self.cached_allocations.clear()
     }
 
     fn get_node(&mut self, node: Node<T>) -> Box<Node<T>> {
@@ -207,7 +254,7 @@ impl<T> Private<T> {
     }
 }
 
-impl<T> Drop for Private<T> {
+impl<T> Drop for LockFreeStacc<T> {
     fn drop(&mut self) {
         self.shared.hazard_pointers[self.thread_number].store(ptr::null_mut(), Ordering::Release);
         self.scan();
@@ -216,7 +263,7 @@ impl<T> Drop for Private<T> {
     }
 }
 
-impl<T> Clone for Private<T> {
+impl<T> Clone for LockFreeStacc<T> {
     fn clone(&self) -> Self {
         let shared = Arc::clone(&self.shared);
         let thread_number = shared.counter.fetch_add(1, Ordering::AcqRel);
@@ -224,7 +271,7 @@ impl<T> Clone for Private<T> {
             shared,
             thread_number,
             retired_pointers: Vec::new(),
-            cached_allocations: Vec::new(),
+            cached_allocations: CachedAllocations::new(),
         }
     }
 }
