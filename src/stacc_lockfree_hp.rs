@@ -2,10 +2,10 @@
  * https://cs.nyu.edu/courses/fall16/CSCI-GA.3033-017/readings/hazard_pointers.pdf
  */
 
+use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ptr;
-use std::sync::Mutex;
-use std::sync::{atomic::*, Arc};
+use std::sync::{atomic::*, Arc, Mutex};
 
 /* 32, because arrays implement Default only up to 32 elements :( */
 const MAX_THREADS: usize = 32;
@@ -32,6 +32,7 @@ impl<T> Node<T> {
 struct Shared<T> {
     top: AtomicPtr<Node<T>>,
     hazard_pointers: [AtomicPtr<Node<T>>; MAX_THREADS],
+    _marker: PhantomData<Box<T>>,
 
     /* If a LockFreeStacc is being dropped, but some pointers are still marked as
      * hazard, they end up here */
@@ -51,6 +52,7 @@ impl<T> Shared<T> {
             boxes_that_are_still_hazard: Mutex::new(Vec::new()),
             counter: AtomicUsize::new(0),
             len: AtomicUsize::new(0),
+            _marker: PhantomData,
         }
     }
 }
@@ -68,8 +70,9 @@ impl<T> Drop for Shared<T> {
 
         let mut top = *self.top.get_mut();
         while !top.is_null() {
-            let next = unsafe { (*top).next };
+            /* SAFETY: the pointer is non-null, so it must come from Box::into_raw */
             let boxed = unsafe { Box::from_raw(top) };
+            let next = boxed.next;
             drop(boxed);
             top = next as *mut _;
         }
@@ -85,6 +88,7 @@ pub struct LockFreeStacc<T> {
     pub cached_allocations: Vec<Box<Node<T>>>,
 }
 
+/* SAFETY: This structure is prepared to be used on multiple threads */
 unsafe impl<T: Send> Send for LockFreeStacc<T> {}
 
 impl<T> LockFreeStacc<T> {
@@ -168,13 +172,14 @@ impl<T> LockFreeStacc<T> {
         let mut top = self.shared.top.load(Ordering::Acquire);
 
         let oldtop = loop {
-            /* SeqCst is _very_ important here, thanks Acrimon for pointing it out */
+            /* SeqCst is _very_ important here and at the load, because without them
+             * the algorithm would be incorrect. Thanks Acrimon for pointing it out! */
             self.shared.hazard_pointers[self.thread_number].store(top, Ordering::SeqCst);
             if top.is_null() {
                 return None;
             }
 
-            let newertop = self.shared.top.load(Ordering::SeqCst);
+            let newertop = self.shared.top.load(Ordering::SeqCst); // see comment before store()
             if newertop != top {
                 top = newertop;
                 continue;
