@@ -127,12 +127,13 @@ impl<T> LockFreeStacc<T> {
         v.sort_unstable();
         let mut rlist = std::mem::replace(&mut self.retired_pointers, Vec::new());
 
-        for ptr in rlist.drain_filter(|x| v.binary_search(x).is_err()) {
+        for ptr in rlist.iter().filter(|x| v.binary_search(x).is_err()).copied() {
             /* SAFETY: pointer is from Box::into_raw and we are the only ones having it */
             debug_assert!(!ptr.is_null());
             let boxed = unsafe { Box::from_raw(ptr as *mut Node<T>) };
             self.prepare_for_reuse(boxed);
         }
+        rlist.retain(|x| v.binary_search(x).is_err());
 
         self.retired_pointers = rlist;
     }

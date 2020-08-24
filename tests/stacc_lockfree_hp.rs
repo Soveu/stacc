@@ -3,7 +3,7 @@ use stacc::stacc_lockfree_hp::*;
 
 #[test]
 fn single() {
-    let mut s = Private::new();
+    let mut s = LockFreeStacc::new();
 
     for i in 0..4 {
         s.push(i);
@@ -18,7 +18,7 @@ fn single() {
 
 #[test]
 fn consumer_producer() {
-    let v = Private::new();
+    let v = LockFreeStacc::new();
 
     let mut vc = v.clone();
     let sender = thread::spawn(move || {
