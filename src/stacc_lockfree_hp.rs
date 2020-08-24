@@ -133,7 +133,7 @@ impl<T> LockFreeStacc<T> {
             let boxed = unsafe { Box::from_raw(ptr as *mut Node<T>) };
             self.prepare_for_reuse(boxed);
         }
-        rlist.retain(|x| v.binary_search(x).is_err());
+        rlist.retain(|x| v.binary_search(x).is_ok());
 
         self.retired_pointers = rlist;
     }
