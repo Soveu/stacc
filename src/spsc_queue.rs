@@ -1,7 +1,7 @@
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{self, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 struct QueueInner<T> {
@@ -66,9 +66,9 @@ impl<T> QueueConsumer<T> {
 
         let newhead = head.wrapping_add(1) & mask;
 
-        fence(Ordering::Acquire);
+        atomic::fence(Ordering::Acquire);
         let item = unsafe { ptr::read(self.inner.data[head].get()).assume_init() };
-        fence(Ordering::Release);
+        atomic::fence(Ordering::Release);
         self.inner.head.store(newhead, Ordering::Release);
 
         return Some(item);
@@ -107,7 +107,7 @@ impl<T> QueueProducer<T> {
 
         /* To make sure ptr::write is visible on the other side and it isn't
          * reordered with the inner.tail store */
-        fence(Ordering::AcqRel);
+        atomic::fence(Ordering::AcqRel);
         self.inner.tail.store(newtail, Ordering::Release);
 
         return None;

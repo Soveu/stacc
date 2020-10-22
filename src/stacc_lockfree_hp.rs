@@ -71,7 +71,7 @@ impl<T> Drop for Shared<T> {
         let mut top = *self.top.get_mut();
         while !top.is_null() {
             /* SAFETY: the pointer is non-null, so it must come from Box::into_raw */
-            let boxed = unsafe { Box::from_raw(top) };
+            let mut boxed = unsafe { Box::from_raw(top) };
             /* SAFETY: boxed.data must be initialized, because its on stack */
             unsafe { ptr::drop_in_place(boxed.data.as_mut_ptr()); }
 
