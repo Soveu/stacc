@@ -18,7 +18,7 @@ pub struct Node<T> {
 
 /* Well, if you happen to own a Node, it means it is outside of stack.
  * That means you can do whatever you want with it */
-unsafe impl<T> Send for Node<T> {}
+unsafe impl<T: Send> Send for Node<T> {}
 
 impl<T> Node<T> {
     pub fn uninit() -> Self {
