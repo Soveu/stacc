@@ -35,7 +35,7 @@ impl<T> Shared<T> {
         }
 
         /* bitwise AND this, just in case */
-        let next_counter = current_counter.wrapping_add(1) & 0b0111_1111;
+        let next_counter = current_counter.wrapping_add(1) & 0b0000_0011;
 
         /* TODO: maybe if succeeded, clean global garbage */
         /* Many threads can try to increment at the same time, so it is
@@ -53,7 +53,7 @@ impl<T> Shared<T> {
     /// Returns the epoch that thread had while starting shared section
     fn end_shared_section(&self, thread_id: usize) -> u8 {
         let epoch = self.thread_epochs[thread_id].load(Ordering::Relaxed);
-        self.thread_epochs[thread_id].store(epoch & 0b1111_1110, Ordering::Release);
+        self.thread_epochs[thread_id].store(epoch & 0b0000_0110, Ordering::Release);
         return epoch >> 1;
     }
 }
@@ -90,7 +90,6 @@ impl<T> Local<T> {
     /// Must come after `mark_use`
     pub unsafe fn defer(&mut self, ptr: *const T) {
         let epoch = self.shared.end_shared_section(self.thread_id);
-        let epoch = epoch % 4;
         self.limbo[epoch as usize].push(ptr);
     }
 }
