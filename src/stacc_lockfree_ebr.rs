@@ -168,8 +168,6 @@ impl<T> Local<T> {
     }
 
     pub fn push(&mut self, data: T) {
-        self.mark_use();
-
         let mut top = self.shared.top.load(Ordering::Acquire);
         let node = Node {
             next: top as *const _,
@@ -189,9 +187,6 @@ impl<T> Local<T> {
             }
             top = newtop;
         }
-
-        /* this should be technically unsafe i guess */
-        self.shared.end_shared_section(self.thread_id);
     }
 
     pub fn pop(&mut self) -> Option<T> {
